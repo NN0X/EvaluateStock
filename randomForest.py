@@ -5,6 +5,7 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score
 from sklearn.preprocessing import StandardScaler
+from sklearn.utils.class_weight import compute_class_weight
 import numpy as np
 import math
 
@@ -43,15 +44,21 @@ def trainBatch():
     print(f"Scaler computed from {totalRows} rows.")
 
     labels = pd.read_csv(TRAIN_LABELS, header=None).values.ravel()
+    labels = labels.astype(np.float32)
     if len(labels) != totalRows:
         print("Number of labels does not match number of rows in training data!")
+
+    print("Computing class weights...")
+    classWeights = compute_class_weight("balanced", classes=np.unique(labels), y=labels)
+    classWeightDict = {i: classWeights[i] for i in range(len(classWeights))}
+    print(f"Class weights: {classWeightDict}")
 
     trainRows = int(totalRows * (1 - TEST_SIZE))
     print(f"Total rows: {totalRows}, Training rows: {trainRows}, Testing rows: {totalRows - trainRows}")
 
     rf = RandomForestClassifier(n_estimators=0,
                                 warm_start=True,
-                                class_weight="balanced",
+                                class_weight=classWeightDict,
                                 max_depth=MAX_DEPTH,
                                 min_samples_split=MIN_SAMPLES_SPLIT,
                                 min_samples_leaf=MIN_SAMPLES_LEAF,
