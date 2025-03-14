@@ -1,93 +1,341 @@
-import os
+import yfinance as yf
 import json
-import time
-from yahooquery import Ticker
+import os
+import pandas as pd
+from datetime import datetime
+import numpy as np
+import tqdm
 
-# List of countries to track stocks from
-COUNTRIES = ["US", "DE", "FR", "GB", "PL", "IT"]
+PERCENTAGE_IMP_TO_BUY = 5 # in percent
+PERCENTAGE_IMP_TO_SELL = 2 # in percent
 
-# Define the features needed for stock data
-FEATURES = ["open", "high", "low", "close", "volume"]
+DATASET_SIZE = 500000
 
-# Ensure directories exist
-def ensure_directories():
-    for country in COUNTRIES:
-        os.makedirs(f"data/{country}", exist_ok=True)
+COUNTRIES = ["BE", "CH", "DE", "DK", "ES", "FI", "FR", "IT", "NL", "NO", "PL", "PT", "SE", "UK", "US"]
 
-# Load stock symbols from JSON files
-def load_symbols():
-    all_symbols = {}
-    for country in COUNTRIES:
+EX_SUFFIXES = {
+    "BE": [".BR"],  # Belgium - Euronext Brussels
+    "CH": [".SW"],  # Switzerland - SIX Swiss Exchange
+    "DE": [".DE", ".F", ".XETRA"],  # Germany - Deutsche Börse, Frankfurt
+    "DK": [".CO"],  # Denmark - Copenhagen
+    "ES": [".MC"],  # Spain - Madrid
+    "FI": [".HE"],  # Finland - Helsinki
+    "FR": [".PA"],  # France - Paris
+    "IT": [".MI"],  # Italy - Milan
+    "NL": [".AS"],  # Netherlands - Euronext Amsterdam
+    "NO": [".OL"],  # Norway - Oslo
+    "PL": [".WA"],  # Poland - Warsaw
+    "PT": [".LS"],  # Portugal - Lisbon
+    "SE": [".ST"],  # Sweden - Stockholm
+    "UK": [".L"],  # United Kingdom - London Stock Exchange
+    "US": [""],  # US stocks typically have no suffix
+}
+
+def loadSymbols(country):
+    symbolsFile = f"symbols/{country}_symbols.json"
+    if not os.path.exists(symbolsFile):
+        return
+
+    with open(symbolsFile, "r") as f:
+        symbols = json.load(f)
+
+    return symbols
+
+def fetchAndSaveData(country):
+    symbols = loadSymbols(country)
+    if not symbols:
+        return
+
+    dataDir = "data/raw"
+    os.makedirs(dataDir, exist_ok=True)
+
+    fetchedSymbols = os.listdir(dataDir)
+    symbols = [symbol for symbol in symbols if f"{country}_{symbol}.json" not in fetchedSymbols]
+
+    print(f"Fetching data for {country}...")
+    print(f"Symbols: {len(symbols)}")
+
+    q = tqdm.tqdm(total=len(symbols))
+    for symbol in symbols:
         try:
-            with open(f"symbols/{country}_symbols.json", "r") as file:
-                all_symbols[country] = json.load(file)  # Load JSON list
-        except FileNotFoundError:
-            print(f"⚠️ Warning: Missing symbols file for {country}")
-            all_symbols[country] = []
-    return all_symbols
+            stock = yf.Ticker(symbol)
+            hist = stock.history(period="max")
 
-# Load existing stock data to append new entries
-def load_existing_data(file_path):
-    if os.path.exists(file_path):
-        try:
-            with open(file_path, "r") as json_file:
-                return json.load(json_file)
-        except json.JSONDecodeError:
-            print(f"⚠️ Warning: Corrupt JSON file: {file_path}, resetting...")
-            return []
-    return []
+            if hist.empty:
+                for suffix in EX_SUFFIXES[country]:
+                    stock = yf.Ticker(symbol + suffix)
+                    hist = stock.history(period="max")
+                    if not hist.empty:
+                        break
+                else:
+                    continue
 
-# Fetch historical stock data and save to JSON
-def fetch_and_save_stock_data(country, symbol):
-    try:
-        stock = Ticker(symbol)
-        
-        # Get historical data - max available data
-        historical_data = stock.history(period="max")  # Fetch maximum historical data
+            hist = hist.reset_index()[["Date", "Open", "High", "Low", "Close", "Volume"]]
+            hist.columns = ["date", "open", "high", "low", "close", "volume"]
 
-        if historical_data.empty:
-            print(f"❌ No data for {symbol}")
-            return
+            outputFile = f"{dataDir}/{country}_{symbol}.json"
+            hist.to_json(outputFile, orient="records", date_format="iso")
+        except Exception as e:
+            pass
+        finally:
+            q.update(1)
 
-        # Extract relevant features (open, high, low, close, volume)
-        historical_data = historical_data[FEATURES]
-        
-        # Prepare the data as a list of dictionaries for each day
-        historical_data = historical_data.reset_index().to_dict(orient="records")
+def loadStockData(country, symbol):
+    dataFile = f"data/raw/{country}_{symbol}.json"
+    if not os.path.exists(dataFile):
+        return
 
-        # Add timestamp of when the data was fetched
-        for entry in historical_data:
-            entry["timestamp"] = time.time()
+    data = pd.read_json(dataFile)
+    data["date"] = pd.to_datetime(data["date"])
 
-        # Define save path
-        save_path = f"data/{country}/{symbol}_data.json"
+    return data
 
-        # Load existing data to append
-        existing_data = load_existing_data(save_path)
-        
-        # Append new historical data
-        existing_data.extend(historical_data)
+def computeSMA(data, period) -> list:
+    sma = data["close"].rolling(window=period).mean()
+    sma = sma.bfill()
 
-        # Save to JSON file
-        with open(save_path, "w") as json_file:
-            json.dump(existing_data, json_file, indent=4)
+    return sma.tolist()
 
-        print(f"✅ Updated: {save_path}")
+def computeEMA(data, period) -> list:
+    ema = data["close"].ewm(span=period, adjust=False).mean()
+    ema = ema.bfill()
 
-    except Exception as e:
-        print(f"❌ Error fetching {symbol}: {e}")
+    return ema.tolist()
 
-# Process all stocks
-def process_stocks():
-    symbols_dict = load_symbols()
-    ensure_directories()
+def computeMACD(data, shortPeriod, longPeriod, signalPeriod) -> list:
+    shortEMA = computeEMA(data, shortPeriod)
+    longEMA = computeEMA(data, longPeriod)
 
-    for country, symbols in symbols_dict.items():
-        for symbol in symbols:
-            fetch_and_save_stock_data(country, symbol)
+    macd = [shortEMA[i] - longEMA[i] for i in range(len(shortEMA))]
+    signal = pd.Series(macd).ewm(span=signalPeriod, adjust=False).mean()
 
-# Run script once to gather data
+    return macd, signal.tolist()
+
+def computeBollinger(data, period) -> list:
+    sma = computeSMA(data, period)
+    std = computeStandardDeviation(data, period)
+
+    upper = [sma[i] + 2 * std[i] for i in range(len(sma))]
+    lower = [sma[i] - 2 * std[i] for i in range(len(sma))]
+
+    return upper, lower
+
+def computeRSI(data, period) -> list:
+    delta = data["close"].diff()
+    gain = delta.where(delta > 0, 0)
+    loss = -delta.where(delta < 0, 0)
+
+    avgGain = gain.rolling(window=period).mean()
+    avgLoss = loss.rolling(window=period).mean()
+
+    rs = avgGain / avgLoss
+    rsi = 100 - (100 / (1 + rs))
+
+    return rsi.tolist()
+
+def computeStochasticOscillator(data, period) -> list:
+    low = data["low"].rolling(window=period).min()
+    high = data["high"].rolling(window=period).max()
+
+    k = 100 * (data["close"] - low) / (high - low)
+    d = k.rolling(window=3).mean()
+
+    return k.tolist(), d.tolist()
+
+def computeROC(data, period) -> list:
+    roc = data["close"].pct_change(period)
+    roc = roc.bfill()
+
+    return roc.tolist()
+
+def computeATR(data, period) -> list:
+    tr = pd.DataFrame()
+    tr["h-l"] = data["high"] - data["low"]
+    tr["h-cp"] = (data["high"] - data["close"].shift(1)).abs()
+    tr["l-cp"] = (data["low"] - data["close"].shift(1)).abs()
+
+    tr = tr.max(axis=1)
+    atr = tr.rolling(window=period).mean()
+
+    return atr.tolist()
+
+def computeStandardDeviation(data, period) -> list:
+    std = data["close"].rolling(window=period).std()
+    std = std.bfill()
+
+    return std.tolist()
+
+def computeVolumeAverage(data, period) -> list:
+    volume = data["volume"].rolling(window=period).mean()
+    volume = volume.bfill()
+
+    return volume.tolist()
+
+def computeFeatures(data) -> dict:
+    features = {}
+
+    features["day"] = data["date"].dt.day.tolist()
+    features["month"] = data["date"].dt.month.tolist()
+    features["weekday"] = data["date"].dt.weekday.tolist()
+
+    features["close"] = data["close"].tolist()
+    features["volume"] = data["volume"].tolist()
+    features["open"] = data["open"].tolist()
+    features["high"] = data["high"].tolist()
+    features["low"] = data["low"].tolist()
+
+    features["sma5"] = computeSMA(data, 5)
+    features["sma10"] = computeSMA(data, 10)
+    features["sma20"] = computeSMA(data, 20)
+    features["sma100"] = computeSMA(data, 100)
+    features["sma200"] = computeSMA(data, 200)
+
+    features["ema5"] = computeEMA(data, 5)
+    features["ema10"] = computeEMA(data, 10)
+    features["ema20"] = computeEMA(data, 20)
+    features["ema50"] = computeEMA(data, 50)
+    features["ema100"] = computeEMA(data, 100)
+    features["ema200"] = computeEMA(data, 200)
+
+    macd, signal = computeMACD(data, 12, 26, 9)
+    features["macd"] = macd
+    features["signal"] = signal
+
+    features["bollingerUpper"], features["bollingerLower"] = computeBollinger(data, 20)
+
+    features["rsi14"] = computeRSI(data, 14)
+    features["rsi28"] = computeRSI(data, 28)
+
+    k14, d14 = computeStochasticOscillator(data, 14)
+    features["stochasticOscillator14k"] = k14
+    features["stochasticOscillator14d"] = d14
+    k28, d28 = computeStochasticOscillator(data, 28)
+    features["stochasticOscillator28k"] = k28
+    features["stochasticOscillator28d"] = d28
+    k50, d50 = computeStochasticOscillator(data, 50)
+    features["stochasticOscillator50k"] = k50
+    features["stochasticOscillator50d"] = d50
+
+    features["roc14"] = computeROC(data, 14)
+    features["roc28"] = computeROC(data, 28)
+    features["roc50"] = computeROC(data, 50)
+
+    features["atr14"] = computeATR(data, 14)
+    features["atr28"] = computeATR(data, 28)
+    features["atr50"] = computeATR(data, 50)
+
+    features["std14"] = computeStandardDeviation(data, 14)
+    features["std28"] = computeStandardDeviation(data, 28)
+    features["std50"] = computeStandardDeviation(data, 50)
+
+    features["volumeAverage5"] = computeVolumeAverage(data, 5)
+    features["volumeAverage10"] = computeVolumeAverage(data, 10)
+    features["volumeAverage20"] = computeVolumeAverage(data, 20)
+    features["volumeAverage50"] = computeVolumeAverage(data, 50)
+    features["volumeAverage100"] = computeVolumeAverage(data, 100)
+    features["volumeAverage200"] = computeVolumeAverage(data, 200)
+
+    return features
+
+def evaluateFuture(data) -> int:
+    """ 0: sell, 1: hold, 2: buy """
+
+    decImpToSell = PERCENTAGE_IMP_TO_SELL / 100
+    decImpToBuy = PERCENTAGE_IMP_TO_BUY / 100
+
+    futureData = data.iloc[-7:]
+    futureClose = futureData["close"].tolist()
+    lastClose = data.iloc[-1]["close"]
+
+    smallestFutureClose = min(futureClose)
+    biggestFutureClose = max(futureClose)
+
+    if smallestFutureClose < lastClose * (1 - decImpToSell):
+        return 0
+    elif biggestFutureClose > lastClose * (1 + decImpToBuy):
+        return 2
+    else:
+        return 1
+
+def printFeatures(features):
+    for key, value in features.items():
+        print(f"{key}: {value[-5:]}")
+        input()
+
+def createTrainingCase(data):
+    dataNoFuture = data.iloc[:-7]
+    features = computeFeatures(dataNoFuture)
+    label = evaluateFuture(data)
+
+    return features, label
+
+def generateTrainingCases(n):
+    symbols = []
+    for country in COUNTRIES:
+        countrySymbols = loadSymbols(country)
+        for symbol in countrySymbols:
+            symbols.append((country, symbol))
+
+    print(f"Generating {n} training cases...")
+    with open("data/training.json", "w") as f:
+        i = 0
+        q = tqdm.tqdm(total=n)
+        while i < n:
+            # get random symbol
+            symbol = symbols[np.random.randint(0, len(symbols))]
+            data = loadStockData(symbol[0], symbol[1])
+            # get random period of data that is at least 200 days long and is continuous
+            if data is None or len(data) < 207:
+                continue
+            dataStartIndex = 0
+            dataEndIndex = len(data) - 207
+            randomStartIndex = np.random.randint(dataStartIndex, dataEndIndex)
+            data = data.iloc[randomStartIndex:randomStartIndex+207]
+
+            features, label = createTrainingCase(data)
+            trainingCase = {
+                "features": features,
+                "label": label
+            }
+            f.write(json.dumps(trainingCase))
+            f.write("\n")
+            i += 1
+            q.update(1)
+        q.close()
+
+def convertTrainingDataToMatrix():
+    with open("data/training.json", "r") as f:
+        with open("data/training_matrix.csv", "w") as fMatrix:
+            with open("data/training_labels.csv", "w") as fLabels:
+                q = tqdm.tqdm(total=DATASET_SIZE)
+                for line in f:
+                    data = json.loads(line)
+                    for key, value in data["features"].items():
+                        for i in range(len(value)):
+                            if value[i] is None:
+                                value[i] = 0
+                            fMatrix.write(str(value[i]))
+                            fMatrix.write(",")
+                    fMatrix.write("\n")
+                    fLabels.write(str(data["label"]) + "\n")
+                    q.update(1)
+                q.close()
+
+def main():
+    #for country in COUNTRIES:
+    #    fetchAndSaveData(country)
+    #print("Data fetching completed.")
+
+    print("Generating training cases...")
+    generateTrainingCases(DATASET_SIZE)
+    print("Training cases generated.")
+
+    print("Converting training data to matrix...")
+    convertTrainingDataToMatrix()
+    print("Training data converted to matrix.")
+
+    print("All done.")
+
+
 if __name__ == "__main__":
-    print("🚀 Fetching historical stock data...")
-    process_stocks()
-    print("✅ Data collection complete!")
+    main()
