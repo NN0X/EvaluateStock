@@ -15,7 +15,7 @@ INPUT_FILE = "data/input.csv"
 SIZE_LIMIT = 20
 CHUNK_SIZE = 100000
 
-N_ESTIMATORS = 5000
+N_ESTIMATORS = 500
 MAX_DEPTH = 20
 MIN_SAMPLES_SPLIT = 10
 MIN_SAMPLES_LEAF = 5
@@ -51,6 +51,7 @@ def trainBatch():
 
     rf = RandomForestClassifier(n_estimators=0,
                                 warm_start=True,
+                                class_weight="balanced",
                                 max_depth=MAX_DEPTH,
                                 min_samples_split=MIN_SAMPLES_SPLIT,
                                 min_samples_leaf=MIN_SAMPLES_LEAF,
@@ -188,6 +189,7 @@ def loadOrTrain():
 
         print("Training the model...")
         rf = RandomForestClassifier(n_estimators=N_ESTIMATORS,
+                                    class_weight="balanced",
                                     max_depth=MAX_DEPTH,
                                     min_samples_split=MIN_SAMPLES_SPLIT,
                                     min_samples_leaf=MIN_SAMPLES_LEAF,
