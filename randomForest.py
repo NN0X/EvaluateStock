@@ -16,8 +16,8 @@ INPUT_FILE = "data/input.csv"
 SIZE_LIMIT = 20
 CHUNK_SIZE = 100000
 
-N_ESTIMATORS = 500
-MAX_DEPTH = 20
+N_ESTIMATORS = 15000
+MAX_DEPTH = 50
 MIN_SAMPLES_SPLIT = 10
 MIN_SAMPLES_LEAF = 5
 MAX_FEATURES = "sqrt"
@@ -51,7 +51,9 @@ def trainBatch():
     print("Computing class weights...")
     classWeights = compute_class_weight("balanced", classes=np.unique(labels), y=labels)
     classWeightDict = {i: classWeights[i] for i in range(len(classWeights))}
-    print(f"Class weights: {classWeightDict}")
+    print(f"Class weights:")
+    for key, value in classWeightDict.items():
+        print(f"Class {key}: {value:.2f}")
 
     trainRows = int(totalRows * (1 - TEST_SIZE))
     print(f"Total rows: {totalRows}, Training rows: {trainRows}, Testing rows: {totalRows - trainRows}")
@@ -64,6 +66,7 @@ def trainBatch():
                                 min_samples_leaf=MIN_SAMPLES_LEAF,
                                 max_features=MAX_FEATURES,
                                 random_state=RANDOM_STATE,
+                                bootstrap=True,
                                 n_jobs=-1)
 
     numTrainChunks = math.ceil(trainRows / CHUNK_SIZE)
@@ -79,6 +82,7 @@ def trainBatch():
 
     print("Starting batch training...")
     for chunk in pd.read_csv(TRAIN_DATA, chunksize=CHUNK_SIZE, header=None):
+        print(f"Processing rows {currentIndex} to {currentIndex + chunk.shape[0]} of {totalRows}...")
         chunkRows = chunk.shape[0]
         chunkLabels = labels[currentIndex: currentIndex + chunkRows]
 
@@ -109,6 +113,7 @@ def trainBatch():
             xTestAll.append(chunkScaled)
             yTestAll.append(chunkLabels)
             currentIndex += chunkRows
+            print(f"Processed test data rows {currentIndex} to {currentIndex + chunkRows}.")
             continue
 
         if treesAdded + treesPerChunk > N_ESTIMATORS:
@@ -120,9 +125,10 @@ def trainBatch():
 
         rf.fit(xTrainChunk, yTrainChunk)
         treesAdded += treesToAdd
-        print(f"Processed rows {currentIndex} to {currentIndex + chunkRows}: added {treesToAdd} trees (Total trees: {rf.n_estimators}).")
+        print(f"Processed training rows {currentIndex} to {currentIndex + chunkRows}: added {treesToAdd} trees (Total trees: {rf.n_estimators}).")
         currentIndex += chunkRows
 
+    print("Preprocessing test data...")
     if xTestAll:
         xTestAll = np.vstack(xTestAll)
         yTestAll = np.concatenate(yTestAll)
@@ -202,6 +208,7 @@ def loadOrTrain():
                                     min_samples_leaf=MIN_SAMPLES_LEAF,
                                     max_features=MAX_FEATURES,
                                     random_state=RANDOM_STATE,
+                                    bootstrap=True,
                                     n_jobs=-1)
         rf.fit(xTrain, yTrain)
         print("Model trained successfully!")
