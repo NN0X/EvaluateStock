@@ -6,10 +6,10 @@ from datetime import datetime
 import numpy as np
 import tqdm
 
-PERCENTAGE_IMP_TO_BUY = 5 # in percent
-PERCENTAGE_IMP_TO_SELL = 2 # in percent
+PERCENTAGE_INC_TO_BUY = 5 # in percent
+PERCENTAGE_DEC_TO_SELL = 2 # in percent
 
-DATASET_SIZE = 500000
+DATASET_SIZE = 100000
 
 COUNTRIES = ["BE", "CH", "DE", "DK", "ES", "FI", "FR", "IT", "NL", "NO", "PL", "PT", "SE", "UK", "US"]
 
@@ -187,15 +187,15 @@ def computeFeatures(data) -> dict:
     features["sma5"] = computeSMA(data, 5)
     features["sma10"] = computeSMA(data, 10)
     features["sma20"] = computeSMA(data, 20)
-    features["sma100"] = computeSMA(data, 100)
-    features["sma200"] = computeSMA(data, 200)
+    #features["sma100"] = computeSMA(data, 100)
+    #features["sma200"] = computeSMA(data, 200)
 
     features["ema5"] = computeEMA(data, 5)
     features["ema10"] = computeEMA(data, 10)
     features["ema20"] = computeEMA(data, 20)
-    features["ema50"] = computeEMA(data, 50)
-    features["ema100"] = computeEMA(data, 100)
-    features["ema200"] = computeEMA(data, 200)
+    #features["ema50"] = computeEMA(data, 50)
+    #features["ema100"] = computeEMA(data, 100)
+    #features["ema200"] = computeEMA(data, 200)
 
     macd, signal = computeMACD(data, 12, 26, 9)
     features["macd"] = macd
@@ -204,44 +204,44 @@ def computeFeatures(data) -> dict:
     features["bollingerUpper"], features["bollingerLower"] = computeBollinger(data, 20)
 
     features["rsi14"] = computeRSI(data, 14)
-    features["rsi28"] = computeRSI(data, 28)
+    #features["rsi28"] = computeRSI(data, 28)
 
     k14, d14 = computeStochasticOscillator(data, 14)
     features["stochasticOscillator14k"] = k14
     features["stochasticOscillator14d"] = d14
-    k28, d28 = computeStochasticOscillator(data, 28)
-    features["stochasticOscillator28k"] = k28
-    features["stochasticOscillator28d"] = d28
-    k50, d50 = computeStochasticOscillator(data, 50)
-    features["stochasticOscillator50k"] = k50
-    features["stochasticOscillator50d"] = d50
+    #k28, d28 = computeStochasticOscillator(data, 28)
+    #features["stochasticOscillator28k"] = k28
+    #features["stochasticOscillator28d"] = d28
+    #k50, d50 = computeStochasticOscillator(data, 50)
+    #features["stochasticOscillator50k"] = k50
+    #features["stochasticOscillator50d"] = d50
 
     features["roc14"] = computeROC(data, 14)
-    features["roc28"] = computeROC(data, 28)
-    features["roc50"] = computeROC(data, 50)
+    #features["roc28"] = computeROC(data, 28)
+    #features["roc50"] = computeROC(data, 50)
 
     features["atr14"] = computeATR(data, 14)
-    features["atr28"] = computeATR(data, 28)
-    features["atr50"] = computeATR(data, 50)
+    #features["atr28"] = computeATR(data, 28)
+    #features["atr50"] = computeATR(data, 50)
 
     features["std14"] = computeStandardDeviation(data, 14)
-    features["std28"] = computeStandardDeviation(data, 28)
-    features["std50"] = computeStandardDeviation(data, 50)
+    #features["std28"] = computeStandardDeviation(data, 28)
+    #features["std50"] = computeStandardDeviation(data, 50)
 
     features["volumeAverage5"] = computeVolumeAverage(data, 5)
     features["volumeAverage10"] = computeVolumeAverage(data, 10)
     features["volumeAverage20"] = computeVolumeAverage(data, 20)
-    features["volumeAverage50"] = computeVolumeAverage(data, 50)
-    features["volumeAverage100"] = computeVolumeAverage(data, 100)
-    features["volumeAverage200"] = computeVolumeAverage(data, 200)
+    #features["volumeAverage50"] = computeVolumeAverage(data, 50)
+    #features["volumeAverage100"] = computeVolumeAverage(data, 100)
+    #features["volumeAverage200"] = computeVolumeAverage(data, 200)
 
     return features
 
 def evaluateFuture(data) -> int:
     """ 0: sell, 1: hold, 2: buy """
 
-    decImpToSell = PERCENTAGE_IMP_TO_SELL / 100
-    decImpToBuy = PERCENTAGE_IMP_TO_BUY / 100
+    decDecToSell = PERCENTAGE_DEC_TO_SELL / 100
+    decIncToBuy = PERCENTAGE_INC_TO_BUY / 100
 
     futureData = data.iloc[-7:]
     futureClose = futureData["close"].tolist()
@@ -250,9 +250,9 @@ def evaluateFuture(data) -> int:
     smallestFutureClose = min(futureClose)
     biggestFutureClose = max(futureClose)
 
-    if smallestFutureClose < lastClose * (1 - decImpToSell):
+    if smallestFutureClose < lastClose * (1 - decDecToSell):
         return 0
-    elif biggestFutureClose > lastClose * (1 + decImpToBuy):
+    elif biggestFutureClose > lastClose * (1 + decIncToBuy):
         return 2
     else:
         return 1
@@ -269,12 +269,17 @@ def createTrainingCase(data):
 
     return features, label
 
+def isSimilar(a, b):
+    return abs(a - b) / ((a + b) / 2) < 0.05
+
 def generateTrainingCases(n):
     symbols = []
     for country in COUNTRIES:
         countrySymbols = loadSymbols(country)
         for symbol in countrySymbols:
             symbols.append((country, symbol))
+
+    labelsCount = [0, 0, 0] # sell, hold, buy
 
     print(f"Generating {n} training cases...")
     with open("data/training.json", "w") as f:
@@ -293,6 +298,14 @@ def generateTrainingCases(n):
             data = data.iloc[randomStartIndex:randomStartIndex+207]
 
             features, label = createTrainingCase(data)
+            if label == 0 and labelsCount[0] >= n / 3 and not isSimilar(labelsCount[1], labelsCount[0]) and not isSimilar(labelsCount[2], labelsCount[0]):
+                continue
+            if label == 1 and labelsCount[1] >= n / 3 and not isSimilar(labelsCount[0], labelsCount[1]) and not isSimilar(labelsCount[2], labelsCount[1]):
+                continue
+            if label == 2 and labelsCount[2] >= n / 3 and not isSimilar(labelsCount[0], labelsCount[2]) and not isSimilar(labelsCount[1], labelsCount[2]):
+                continue
+
+            labelsCount[label] += 1
             trainingCase = {
                 "features": features,
                 "label": label

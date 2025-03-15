@@ -6,6 +6,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score
 from sklearn.preprocessing import StandardScaler
 from sklearn.utils.class_weight import compute_class_weight
+from sklearn.metrics import classification_report
 import numpy as np
 import math
 
@@ -14,13 +15,13 @@ TRAIN_DATA = "data/training_matrix.csv"
 TRAIN_LABELS = "data/training_labels.csv"
 INPUT_FILE = "data/input.csv"
 SIZE_LIMIT = 20
-CHUNK_SIZE = 100000
+CHUNK_SIZE = 80000
 
-N_ESTIMATORS = 15000
-MAX_DEPTH = 50
-MIN_SAMPLES_SPLIT = 10
-MIN_SAMPLES_LEAF = 5
-MAX_FEATURES = "sqrt"
+N_ESTIMATORS = 10000
+MAX_DEPTH = 30
+MIN_SAMPLES_SPLIT = 5
+MIN_SAMPLES_LEAF = 2
+MAX_FEATURES = "log2"
 RANDOM_STATE = 42
 
 TEST_SIZE = 0.2
@@ -136,6 +137,8 @@ def trainBatch():
         yPred = rf.predict(xTestAll)
         acc = accuracy_score(yTestAll, yPred)
         print(f"Model Accuracy: {acc:.2f}")
+        print("Classification Report:")
+        print(classification_report(yTestAll, yPred))
     else:
         print("No test data collected for evaluation.")
 
@@ -200,9 +203,16 @@ def loadOrTrain():
         xTrain, xTest, yTrain, yTest = train_test_split(x, y, test_size=TEST_SIZE, random_state=RANDOM_STATE)
         print(f"Successfully split data into training and testing sets!")
 
+        print("Computing class weights...")
+        classWeights = compute_class_weight("balanced", classes=np.unique(yTrain), y=yTrain)
+        classWeightDict = {i: classWeights[i] for i in range(len(classWeights))}
+        print(f"Class weights:")
+        for key, value in classWeightDict.items():
+            print(f"Class {key}: {value:.2f}")
+
         print("Training the model...")
         rf = RandomForestClassifier(n_estimators=N_ESTIMATORS,
-                                    class_weight="balanced",
+                                    class_weight=classWeightDict,
                                     max_depth=MAX_DEPTH,
                                     min_samples_split=MIN_SAMPLES_SPLIT,
                                     min_samples_leaf=MIN_SAMPLES_LEAF,
@@ -217,10 +227,13 @@ def loadOrTrain():
         yPred = rf.predict(xTest)
         print(f"Model Accuracy: {accuracy_score(yTest, yPred):.2f}")
 
+        print("Classification Report:")
+        print(classification_report(yTest, yPred))
+
         print("Saving the model...")
 
-        name = f"rd-model-f32-{sizeData}-{nEstimators}-{maxDepth}-{minSamplesSplit}-{minSamplesLeaf}-{maxFeatures}-{randomState}.model"
-        joblib.dump(rf, MODEL_FILE)
+        name = f"rd-model-f32-{sizeData}-{N_ESTIMATORS}-{MAX_DEPTH}-{MIN_SAMPLES_SPLIT}-{MIN_SAMPLES_LEAF}-{MAX_FEATURES}-{RANDOM_STATE}.model"
+        joblib.dump(rf, MODEL_FILE_PATH + name)
         print("Model trained and saved successfully!")
 
     return rf
