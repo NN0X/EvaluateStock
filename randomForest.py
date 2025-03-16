@@ -79,6 +79,8 @@ def trainBatch():
     xTestAll = []
     yTestAll = []
 
+    chunkAccuracies = []
+
     print("Starting batch training...")
     for chunk in pd.read_csv(TRAIN_DATA, chunksize=CHUNK_SIZE, header=None):
         print(f"Processing rows {currentIndex} to {currentIndex + chunk.shape[0]} of {totalRows}...")
@@ -125,12 +127,23 @@ def trainBatch():
         rf.n_estimators += treesToAdd
 
         rf.fit(xTrainChunk, yTrainChunk)
+
+        yPred = rf.predict(xTrainChunk)
+        acc = accuracy_score(yTrainChunk, yPred)
+        chunkAccuracies.append(acc)
+
         treesAdded += treesToAdd
         targetRows = currentIndex + chunkRows
         if targetRows > trainRows:
             targetRows = trainRows
         print(f"Processed training rows {currentIndex} to {targetRows}: added {treesToAdd} trees (Total trees: {rf.n_estimators}).")
+        print(f"Chunk Accuracy: {acc:.2f}")
         currentIndex += chunkRows
+
+    print("Batch training completed!")
+    print("Training Accuracy:")
+    print(f"Mean: {np.mean(chunkAccuracies):.2f}")
+    print(f"Standard Deviation: {np.std(chunkAccuracies):.2f}")
 
     print("Preprocessing test data...")
     if xTestAll:
@@ -230,6 +243,9 @@ def loadOrTrain():
         rf.fit(xTrain, yTrain)
         print("Model trained successfully!")
 
+        trainPred = rf.predict(xTrain)
+        print(f"Training Accuracy: {accuracy_score(yTrain, trainPred):.2f}")
+
         print("Evaluating the model...")
         yPred = rf.predict(xTest)
         print(f"Model Accuracy: {accuracy_score(yTest, yPred):.2f}")
@@ -250,17 +266,25 @@ def loadOrTrain():
 
     return rf
 
+
 def predict(rf):
-    if not os.path.exists(INPUT_FILE):
-        print(f"Input file '{INPUT_FILE}' not found! Skipping prediction.")
-        return
+    input = pd.read_csv(INPUT_FILE, header=None)
+    input = input.astype(np.float32)
+    print("Preprocessing the input data...")
+    if np.any(np.isnan(input)):
+        print("Found NaN values in the input data! Replacing with 0s...")
+        input.fillna(0, inplace=True)
+    if np.any(np.isinf(input)):
+        print("Found infinite values in the input data! Replacing with 0s...")
+        input.replace([np.inf, -np.inf], 0, inplace=True)
+    print("Data preprocessed successfully!")
 
-    inputData = pd.read_csv(INPUT_FILE, header=None)
-    predictions = rf.predict(inputData)
-
+    print("Predicting...")
+    pred = rf.predict(input)
     print("Predictions:")
-    print(predictions)
+    print(pred)
 
+    return pred
 
 if __name__ == "__main__":
     rf = loadOrTrain()

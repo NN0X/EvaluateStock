@@ -397,10 +397,16 @@ def convertTrainingDataToMatrix():
                 for line in f:
                     data = json.loads(line)
                     for key, value in data["features"].items():
-                        for i in range(len(value)):
-                            if value[i] is None:
-                                value[i] = 0
-                            fMatrix.write(str(value[i]))
+                        if isinstance(value, list):
+                            for i in range(len(value)):
+                                if value[i] is None:
+                                    value[i] = 0
+                                fMatrix.write(str(value[i]))
+                                fMatrix.write(",")
+                        else:
+                            if value is None:
+                                value = 0
+                            fMatrix.write(str(value))
                             fMatrix.write(",")
                     fMatrix.write("\n")
                     fLabels.write(str(data["label"]) + "\n")
@@ -455,9 +461,9 @@ def main():
     convertTrainingDataToMatrix()
     print("Training data converted to matrix.")
 
-    print("Shuffling training data...")
-    shuffleTrainingData()
-    print("Training data shuffled.")
+    #print("Shuffling training data...")
+    #shuffleTrainingData()
+    #print("Training data shuffled.")
 
     print("All done.")
 
