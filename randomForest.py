@@ -4,9 +4,10 @@ import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score
-from sklearn.preprocessing import StandardScaler
 from sklearn.utils.class_weight import compute_class_weight
 from sklearn.metrics import classification_report
+from sklearn.model_selection import StratifiedKFold, cross_val_score
+from sklearn.datasets import make_classification
 import numpy as np
 import math
 
@@ -17,10 +18,10 @@ INPUT_FILE = "data/input.csv"
 SIZE_LIMIT = 20
 CHUNK_SIZE = 80000
 
-N_ESTIMATORS = 10000
+N_ESTIMATORS = 1000
 MAX_DEPTH = 30
-MIN_SAMPLES_SPLIT = 5
-MIN_SAMPLES_LEAF = 2
+MIN_SAMPLES_SPLIT = 10
+MIN_SAMPLES_LEAF = 5
 MAX_FEATURES = "log2"
 RANDOM_STATE = 42
 
@@ -29,9 +30,8 @@ TEST_SIZE = 0.2
 def trainBatch():
     print("Batch training initialized...")
 
-    scaler = StandardScaler()
     totalRows = 0
-    print("Computing scaler statistics...")
+    print("Preprocessing dataset...")
     for chunk in pd.read_csv(TRAIN_DATA, chunksize=CHUNK_SIZE, header=None):
         if np.any(np.isnan(chunk)):
             print("Found NaN values in a chunk; replacing with 0s...")
@@ -39,10 +39,8 @@ def trainBatch():
         if np.any(np.isinf(chunk)):
             print("Found infinite values in a chunk; replacing with 0s...")
             chunk.replace([np.inf, -np.inf], 0, inplace=True)
-        chunk = chunk.astype(np.float32)
-        scaler.partial_fit(chunk)
         totalRows += chunk.shape[0]
-    print(f"Scaler computed from {totalRows} rows.")
+    print("Dataset preprocessed successfully!")
 
     labels = pd.read_csv(TRAIN_LABELS, header=None).values.ravel()
     labels = labels.astype(np.float32)
@@ -96,25 +94,27 @@ def trainBatch():
             chunk.replace([np.inf, -np.inf], 0, inplace=True)
 
         chunk = chunk.astype(np.float32)
-        chunkScaled = scaler.transform(chunk)
 
         if currentIndex < trainRows:
             if currentIndex + chunkRows <= trainRows:
-                xTrainChunk = chunkScaled
+                xTrainChunk = chunk
                 yTrainChunk = chunkLabels
             else:
                 splitPoint = trainRows - currentIndex
-                xTrainChunk = chunkScaled[:splitPoint]
+                xTrainChunk = chunk[:splitPoint]
                 yTrainChunk = chunkLabels[:splitPoint]
-                xTestChunk = chunkScaled[splitPoint:]
+                xTestChunk = chunk[splitPoint:]
                 yTestChunk = chunkLabels[splitPoint:]
                 xTestAll.append(xTestChunk)
                 yTestAll.append(yTestChunk)
         else:
-            xTestAll.append(chunkScaled)
+            xTestAll.append(chunk)
             yTestAll.append(chunkLabels)
             currentIndex += chunkRows
-            print(f"Processed test data rows {currentIndex} to {currentIndex + chunkRows}.")
+            targetRows = currentIndex + chunkRows
+            if targetRows > totalRows:
+                targetRows = totalRows
+            print(f"Processed test rows {currentIndex} to {targetRows}.")
             continue
 
         if treesAdded + treesPerChunk > N_ESTIMATORS:
@@ -126,19 +126,26 @@ def trainBatch():
 
         rf.fit(xTrainChunk, yTrainChunk)
         treesAdded += treesToAdd
-        print(f"Processed training rows {currentIndex} to {currentIndex + chunkRows}: added {treesToAdd} trees (Total trees: {rf.n_estimators}).")
+        targetRows = currentIndex + chunkRows
+        if targetRows > trainRows:
+            targetRows = trainRows
+        print(f"Processed training rows {currentIndex} to {targetRows}: added {treesToAdd} trees (Total trees: {rf.n_estimators}).")
         currentIndex += chunkRows
 
     print("Preprocessing test data...")
     if xTestAll:
         xTestAll = np.vstack(xTestAll)
         yTestAll = np.concatenate(yTestAll)
+        print(f"Test data shape: {xTestAll.shape}")
         print("Evaluating the model...")
         yPred = rf.predict(xTestAll)
         acc = accuracy_score(yTestAll, yPred)
+        kf = StratifiedKFold(n_splits=5, shuffle=True, random_state=RANDOM_STATE)
+        cvAcc = cross_val_score(rf, xTestAll, yTestAll, cv=kf, scoring="accuracy")
         print(f"Model Accuracy: {acc:.2f}")
         print("Classification Report:")
         print(classification_report(yTestAll, yPred))
+        print(f"Cross Validation Accuracy: {np.mean(cvAcc):.2f} (+/- {np.std(cvAcc) * 2:.2f})")
     else:
         print("No test data collected for evaluation.")
 
@@ -229,6 +236,11 @@ def loadOrTrain():
 
         print("Classification Report:")
         print(classification_report(yTest, yPred))
+
+        print("k-Fold Cross Validation:")
+        kf = StratifiedKFold(n_splits=5, shuffle=True, random_state=RANDOM_STATE)
+        cvAcc = cross_val_score(rf, xTest, yTest, cv=kf, scoring="accuracy")
+        print(f"Cross Validation Accuracy: {np.mean(cvAcc):.2f} (+/- {np.std(cvAcc) * 2:.2f})")
 
         print("Saving the model...")
 

@@ -5,11 +5,15 @@ import pandas as pd
 from datetime import datetime
 import numpy as np
 import tqdm
+from multiprocessing import Process, Array, Value, Lock, Queue
+from queue import Full
+import time
+import psutil
 
 PERCENTAGE_INC_TO_BUY = 5 # in percent
 PERCENTAGE_DEC_TO_SELL = 2 # in percent
 
-DATASET_SIZE = 100000
+DATASET_SIZE = 100
 
 COUNTRIES = ["BE", "CH", "DE", "DK", "ES", "FI", "FR", "IT", "NL", "NO", "PL", "PT", "SE", "UK", "US"]
 
@@ -30,6 +34,8 @@ EX_SUFFIXES = {
     "UK": [".L"],  # United Kingdom - London Stock Exchange
     "US": [""],  # US stocks typically have no suffix
 }
+
+QUEUE_LIMIT = int(psutil.virtual_memory().total / (1024 ** 3) * psutil.cpu_count() * 80000)
 
 def loadSymbols(country):
     symbolsFile = f"symbols/{country}_symbols.json"
@@ -272,49 +278,116 @@ def createTrainingCase(data):
 def isSimilar(a, b):
     return abs(a - b) / ((a + b) / 2) < 0.05
 
+def generateTrainingCasesWorker(symbols, labelsCount, globalI, lock, queue, n):
+    while True:
+        with lock:
+            if globalI.value >= n:
+                return
+
+        symbol = symbols[np.random.randint(0, len(symbols))]
+        data = loadStockData(symbol[0], symbol[1])
+        if data is None or len(data) < 207:
+            continue
+        dataEndIndex = len(data) - 207
+        if dataEndIndex <= 0:
+            continue
+        randomStartIndex = np.random.randint(0, dataEndIndex)
+        dataSegment = data.iloc[randomStartIndex:randomStartIndex+207]
+        features, label = createTrainingCase(dataSegment)
+        if features is None:
+            continue
+
+        with lock:
+            currentI = globalI.value
+            if currentI >= n:
+                return
+
+            lc = labelsCount[:]
+            allow = True
+            if label == 0:
+                if (lc[0] >= n/3 and
+                    not isSimilar(lc[1], lc[0]) and
+                    not isSimilar(lc[2], lc[0])):
+                    allow = False
+            elif label == 1:
+                if (lc[1] >= n/3 and
+                    not isSimilar(lc[0], lc[1]) and
+                    not isSimilar(lc[2], lc[1])):
+                    allow = False
+            elif label == 2:
+                if (lc[2] >= n/3 and
+                    not isSimilar(lc[0], lc[2]) and
+                    not isSimilar(lc[1], lc[2])):
+                    allow = False
+
+            if allow:
+                labelsCount[label] += 1
+                globalI.value += 1
+                while True:
+                    try:
+                        queue.put((features, label), timeout=0.1)
+                        break
+                    except Full:
+                        if globalI.value >= n:
+                            return
+
+def generateTrainingCasesWriter(queue, n):
+    with open("data/training.json", "w") as f:
+        count = 0
+        while count < n:
+            case = queue.get()
+            if case is None:
+                break
+            features, label = case
+            trainingCase = {
+                "features": features,
+                "label": int(label)
+            }
+            f.write(json.dumps(trainingCase) + "\n")
+            count += 1
+
 def generateTrainingCases(n):
     symbols = []
     for country in COUNTRIES:
         countrySymbols = loadSymbols(country)
-        for symbol in countrySymbols:
-            symbols.append((country, symbol))
+        symbols.extend((country, sym) for sym in countrySymbols)
 
-    labelsCount = [0, 0, 0] # sell, hold, buy
+    labelsCount = Array('i', [0, 0, 0])
+    globalI = Value('i', 0)
+    lock = Lock()
+    queue = Queue(maxsize=80000)
 
-    print(f"Generating {n} training cases...")
-    with open("data/training.json", "w") as f:
-        i = 0
-        q = tqdm.tqdm(total=n)
-        while i < n:
-            # get random symbol
-            symbol = symbols[np.random.randint(0, len(symbols))]
-            data = loadStockData(symbol[0], symbol[1])
-            # get random period of data that is at least 200 days long and is continuous
-            if data is None or len(data) < 207:
-                continue
-            dataStartIndex = 0
-            dataEndIndex = len(data) - 207
-            randomStartIndex = np.random.randint(dataStartIndex, dataEndIndex)
-            data = data.iloc[randomStartIndex:randomStartIndex+207]
+    pbar = tqdm.tqdm(total=n, desc="Generating training cases")
 
-            features, label = createTrainingCase(data)
-            if label == 0 and labelsCount[0] >= n / 3 and not isSimilar(labelsCount[1], labelsCount[0]) and not isSimilar(labelsCount[2], labelsCount[0]):
-                continue
-            if label == 1 and labelsCount[1] >= n / 3 and not isSimilar(labelsCount[0], labelsCount[1]) and not isSimilar(labelsCount[2], labelsCount[1]):
-                continue
-            if label == 2 and labelsCount[2] >= n / 3 and not isSimilar(labelsCount[0], labelsCount[2]) and not isSimilar(labelsCount[1], labelsCount[2]):
-                continue
+    writerProcess = Process(target=generateTrainingCasesWriter, args=(queue, n))
+    writerProcess.start()
 
-            labelsCount[label] += 1
-            trainingCase = {
-                "features": features,
-                "label": label
-            }
-            f.write(json.dumps(trainingCase))
-            f.write("\n")
-            i += 1
-            q.update(1)
-        q.close()
+    numWorkers = os.cpu_count()
+    workers = []
+    for _ in range(numWorkers):
+        p = Process(target=generateTrainingCasesWorker,
+                   args=(symbols, labelsCount, globalI, lock, queue, n))
+        p.start()
+        workers.append(p)
+
+    try:
+        while any(w.is_alive() for w in workers):
+            current_i = globalI.value
+            pbar.n = current_i
+            pbar.refresh()
+            time.sleep(0.1)
+    except KeyboardInterrupt:
+        pass
+
+    for w in workers:
+        w.join()
+
+    writerProcess.join()
+
+    pbar.n = globalI.value
+    pbar.close()
+
+    print(f"Generated {globalI.value} training cases with label distribution: {list(labelsCount)}")
 
 def convertTrainingDataToMatrix():
     with open("data/training.json", "r") as f:
@@ -334,6 +407,41 @@ def convertTrainingDataToMatrix():
                     q.update(1)
                 q.close()
 
+def shuffleTrainingData():
+    matrixOffsets = []
+    with open("data/training_matrix.csv", "rb") as f:
+        for _ in tqdm.tqdm(range(DATASET_SIZE), desc="Reading matrix offsets"):
+            matrixOffsets.append(f.tell())
+            f.readline()
+
+    labelsOffsets = []
+    with open("data/training_labels.csv", "rb") as f:
+        for _ in tqdm.tqdm(range(DATASET_SIZE), desc="Reading labels offsets"):
+            labelsOffsets.append(f.tell())
+            f.readline()
+
+    assert len(matrixOffsets) == DATASET_SIZE and len(labelsOffsets) == DATASET_SIZE, "Dataset size mismatch"
+
+    lineIndices = np.arange(DATASET_SIZE)
+    np.random.shuffle(lineIndices)
+
+    with open("data/training_matrix.csv", "rb") as fMatrixIn, \
+         open("data/training_labels.csv", "rb") as fLabelsIn, \
+         open("data/training_matrix_shuffled.csv.tmp", "wb") as fMatrixOut, \
+         open("data/training_labels_shuffled.csv.tmp", "wb") as fLabelsOut:
+
+        for idx in tqdm.tqdm(lineIndices, desc="Shuffling data"):
+            fMatrixIn.seek(matrixOffsets[idx])
+            matrixLine = fMatrixIn.readline()
+            fMatrixOut.write(matrixLine)
+
+            fLabelsIn.seek(labelsOffsets[idx])
+            labelLine = fLabelsIn.readline()
+            fLabelsOut.write(labelLine)
+
+    os.replace("data/training_matrix_shuffled.csv.tmp", "data/training_matrix.csv")
+    os.replace("data/training_labels_shuffled.csv.tmp", "data/training_labels.csv")
+
 def main():
     #for country in COUNTRIES:
     #    fetchAndSaveData(country)
@@ -346,6 +454,10 @@ def main():
     print("Converting training data to matrix...")
     convertTrainingDataToMatrix()
     print("Training data converted to matrix.")
+
+    print("Shuffling training data...")
+    shuffleTrainingData()
+    print("Training data shuffled.")
 
     print("All done.")
 
