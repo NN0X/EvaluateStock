@@ -13,7 +13,7 @@ import psutil
 PERCENTAGE_INC_TO_BUY = 5 # in percent
 PERCENTAGE_DEC_TO_SELL = 2 # in percent
 
-DATASET_SIZE = 100
+DATASET_SIZE = 1000000
 
 COUNTRIES = ["BE", "CH", "DE", "DK", "ES", "FI", "FR", "IT", "NL", "NO", "PL", "PT", "SE", "UK", "US"]
 
@@ -35,7 +35,7 @@ EX_SUFFIXES = {
     "US": [""],  # US stocks typically have no suffix
 }
 
-QUEUE_LIMIT = int(psutil.virtual_memory().total / (1024 ** 3) * psutil.cpu_count() * 80000)
+QUEUE_LIMIT = int(psutil.virtual_memory().total / (1024 ** 3) * psutil.cpu_count() * 100000)
 
 def loadSymbols(country):
     symbolsFile = f"symbols/{country}_symbols.json"
@@ -243,22 +243,20 @@ def computeFeatures(data) -> dict:
 
     return features
 
-def evaluateFuture(data) -> int:
+def evaluateFuture(data, currentClose) -> int:
     """ 0: sell, 1: hold, 2: buy """
 
     decDecToSell = PERCENTAGE_DEC_TO_SELL / 100
     decIncToBuy = PERCENTAGE_INC_TO_BUY / 100
 
-    futureData = data.iloc[-7:]
-    futureClose = futureData["close"].tolist()
-    lastClose = data.iloc[-1]["close"]
+    futureClose = data["close"].tolist()
 
     smallestFutureClose = min(futureClose)
     biggestFutureClose = max(futureClose)
 
-    if smallestFutureClose < lastClose * (1 - decDecToSell):
+    if smallestFutureClose < currentClose * (1 - decDecToSell):
         return 0
-    elif biggestFutureClose > lastClose * (1 + decIncToBuy):
+    elif biggestFutureClose > currentClose * (1 + decIncToBuy):
         return 2
     else:
         return 1
@@ -270,8 +268,10 @@ def printFeatures(features):
 
 def createTrainingCase(data):
     dataNoFuture = data.iloc[:-7]
+    dataFuture = data.iloc[-7:]
+    currentClose = dataNoFuture.iloc[-1]["close"]
     features = computeFeatures(dataNoFuture)
-    label = evaluateFuture(data)
+    label = evaluateFuture(dataFuture, currentClose)
 
     return features, label
 
