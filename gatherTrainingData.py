@@ -5,7 +5,8 @@ import pandas as pd
 from datetime import datetime
 import numpy as np
 import tqdm
-from multiprocessing import Process, Array, Value, Lock, Queue
+from multiprocessing import Process, Array, Value, Lock, Queue, Manager
+import multiprocessing
 from queue import Full
 import time
 import psutil
@@ -13,7 +14,7 @@ import psutil
 PERCENTAGE_INC_TO_BUY = 5 # in percent
 PERCENTAGE_DEC_TO_SELL = 2 # in percent
 
-DATASET_SIZE = 1000000
+DATASET_SIZE = 500000
 
 COUNTRIES = ["BE", "CH", "DE", "DK", "ES", "FI", "FR", "IT", "NL", "NO", "PL", "PT", "SE", "UK", "US"]
 
@@ -180,9 +181,9 @@ def computeVolumeAverage(data, period) -> list:
 def computeFeatures(data) -> dict:
     features = {}
 
-    features["day"] = data["date"].dt.day.tolist()
-    features["month"] = data["date"].dt.month.tolist()
-    features["weekday"] = data["date"].dt.weekday.tolist()
+    features["day"] = data["date"].dt.day.tolist()[-1]
+    features["month"] = data["date"].dt.month.tolist()[-1]
+    features["weekday"] = data["date"].dt.weekday.tolist()[-1]
 
     features["close"] = data["close"].tolist()
     features["volume"] = data["volume"].tolist()
@@ -278,21 +279,25 @@ def createTrainingCase(data):
 def isSimilar(a, b):
     return abs(a - b) / ((a + b) / 2) < 0.05
 
-def generateTrainingCasesWorker(symbols, labelsCount, globalI, lock, queue, n):
+def generateTrainingCasesWorker(symbols, labelsCount, globalI, symbolsUsed,lock, queue, n):
     while True:
         with lock:
             if globalI.value >= n:
                 return
+            else:
+                currentI = globalI.value
 
         symbol = symbols[np.random.randint(0, len(symbols))]
+        index = 0
+        if symbol in symbolsUsed.keys():
+            index = symbolsUsed[symbol]
+
         data = loadStockData(symbol[0], symbol[1])
-        if data is None or len(data) < 207:
+        if data is None or len(data) < index*207 + 207:
             continue
-        dataEndIndex = len(data) - 207
-        if dataEndIndex <= 0:
-            continue
-        randomStartIndex = np.random.randint(0, dataEndIndex)
-        dataSegment = data.iloc[randomStartIndex:randomStartIndex+207]
+        dataSegment = data.iloc[index*207:index*207+207]
+        with lock:
+            symbolsUsed[symbol] = index + 1
         features, label = createTrainingCase(dataSegment)
         if features is None:
             continue
@@ -354,6 +359,7 @@ def generateTrainingCases(n):
 
     labelsCount = Array('i', [0, 0, 0])
     globalI = Value('i', 0)
+    symbolsUsed = multiprocessing.Manager().dict()
     lock = Lock()
     queue = Queue(maxsize=80000)
 
@@ -366,7 +372,7 @@ def generateTrainingCases(n):
     workers = []
     for _ in range(numWorkers):
         p = Process(target=generateTrainingCasesWorker,
-                   args=(symbols, labelsCount, globalI, lock, queue, n))
+                   args=(symbols, labelsCount, globalI, symbolsUsed, lock, queue, n))
         p.start()
         workers.append(p)
 

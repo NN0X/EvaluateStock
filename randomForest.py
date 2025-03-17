@@ -6,7 +6,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score
 from sklearn.utils.class_weight import compute_class_weight
 from sklearn.metrics import classification_report
-from sklearn.model_selection import StratifiedKFold, cross_val_score
+from sklearn.model_selection import cross_val_score, TimeSeriesSplit
 from sklearn.datasets import make_classification
 import numpy as np
 import math
@@ -153,7 +153,7 @@ def trainBatch():
         print("Evaluating the model...")
         yPred = rf.predict(xTestAll)
         acc = accuracy_score(yTestAll, yPred)
-        kf = StratifiedKFold(n_splits=5, shuffle=True, random_state=RANDOM_STATE)
+        kf = TimeSeriesSplit(n_splits=5)
         cvAcc = cross_val_score(rf, xTestAll, yTestAll, cv=kf, scoring="accuracy")
         print(f"Model Accuracy: {acc:.2f}")
         print("Classification Report:")
@@ -202,6 +202,7 @@ def loadOrTrain():
         sizeData = x.shape[0]
 
         print("Preprocessing the data...")
+        x = x.astype(np.float32)
         if np.any(np.isnan(x)):
             print("Found NaN values in the data! Replacing with 0s...")
             x.fillna(0, inplace=True)
@@ -211,16 +212,13 @@ def loadOrTrain():
         print("Data preprocessed successfully!")
 
         print(f"Training data shape: {x.shape}")
-        print("Scaling the data...")
-        x = StandardScaler().fit_transform(x.astype(np.float32))
-        print(f"Scaled data successfully!")
 
         print("Loading training labels...")
         y = pd.read_csv(TRAIN_LABELS, header=None).values.ravel()
         print(f"Training labels shape: {y.shape}")
 
         print("Splitting data into training and testing sets...")
-        xTrain, xTest, yTrain, yTest = train_test_split(x, y, test_size=TEST_SIZE, random_state=RANDOM_STATE)
+        xTrain, xTest, yTrain, yTest = train_test_split(x, y, test_size=TEST_SIZE, shuffle=False)
         print(f"Successfully split data into training and testing sets!")
 
         print("Computing class weights...")
@@ -254,7 +252,7 @@ def loadOrTrain():
         print(classification_report(yTest, yPred))
 
         print("k-Fold Cross Validation:")
-        kf = StratifiedKFold(n_splits=5, shuffle=True, random_state=RANDOM_STATE)
+        kf = TimeSeriesSplit(n_splits=5)
         cvAcc = cross_val_score(rf, xTest, yTest, cv=kf, scoring="accuracy")
         print(f"Cross Validation Accuracy: {np.mean(cvAcc):.2f} (+/- {np.std(cvAcc) * 2:.2f})")
 

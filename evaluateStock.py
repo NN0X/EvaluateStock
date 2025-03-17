@@ -14,7 +14,7 @@ def getStockData(symbol) -> dict:
     hist["date"] = pd.to_datetime(hist["date"])
 
     # take only the last 205 days and cut off the first 5
-    hist = hist.tail(215)
+    hist = hist.tail(230)
     hist = hist.head(200)
 
     return computeFeatures(hist)
