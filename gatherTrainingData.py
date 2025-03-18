@@ -15,6 +15,9 @@ PERCENTAGE_INC_TO_BUY = 5 # in percent
 PERCENTAGE_DEC_TO_SELL = 2 # in percent
 
 DATASET_SIZE = 500000
+WINDOW_SIZE = 14
+FUTURE_WINDOW_SIZE = 7
+
 
 COUNTRIES = ["BE", "CH", "DE", "DK", "ES", "FI", "FR", "IT", "NL", "NO", "PL", "PT", "SE", "UK", "US"]
 
@@ -150,7 +153,7 @@ def computeStochasticOscillator(data, period) -> list:
     return k.tolist(), d.tolist()
 
 def computeROC(data, period) -> list:
-    roc = data["close"].pct_change(period)
+    roc = data["close"].pct_change(period, fill_method=None)
     roc = roc.bfill()
 
     return roc.tolist()
@@ -192,23 +195,23 @@ def computeFeatures(data) -> dict:
     features["low"] = data["low"].tolist()
 
     features["sma5"] = computeSMA(data, 5)
-    features["sma10"] = computeSMA(data, 10)
-    features["sma20"] = computeSMA(data, 20)
+    #features["sma10"] = computeSMA(data, 10)
+    #features["sma20"] = computeSMA(data, 20)
     #features["sma100"] = computeSMA(data, 100)
     #features["sma200"] = computeSMA(data, 200)
 
     features["ema5"] = computeEMA(data, 5)
-    features["ema10"] = computeEMA(data, 10)
-    features["ema20"] = computeEMA(data, 20)
+    #features["ema10"] = computeEMA(data, 10)
+    #features["ema20"] = computeEMA(data, 20)
     #features["ema50"] = computeEMA(data, 50)
     #features["ema100"] = computeEMA(data, 100)
     #features["ema200"] = computeEMA(data, 200)
 
-    macd, signal = computeMACD(data, 12, 26, 9)
-    features["macd"] = macd
-    features["signal"] = signal
+    #macd, signal = computeMACD(data, 12, 26, 9)
+    #features["macd"] = macd
+    #features["signal"] = signal
 
-    features["bollingerUpper"], features["bollingerLower"] = computeBollinger(data, 20)
+    #features["bollingerUpper"], features["bollingerLower"] = computeBollinger(data, 20)
 
     features["rsi14"] = computeRSI(data, 14)
     #features["rsi28"] = computeRSI(data, 28)
@@ -236,8 +239,8 @@ def computeFeatures(data) -> dict:
     #features["std50"] = computeStandardDeviation(data, 50)
 
     features["volumeAverage5"] = computeVolumeAverage(data, 5)
-    features["volumeAverage10"] = computeVolumeAverage(data, 10)
-    features["volumeAverage20"] = computeVolumeAverage(data, 20)
+    #features["volumeAverage10"] = computeVolumeAverage(data, 10)
+    #features["volumeAverage20"] = computeVolumeAverage(data, 20)
     #features["volumeAverage50"] = computeVolumeAverage(data, 50)
     #features["volumeAverage100"] = computeVolumeAverage(data, 100)
     #features["volumeAverage200"] = computeVolumeAverage(data, 200)
@@ -280,22 +283,34 @@ def isSimilar(a, b):
     return abs(a - b) / ((a + b) / 2) < 0.05
 
 def generateTrainingCasesWorker(symbols, labelsCount, globalI, symbolsUsed,lock, queue, n):
+    window = WINDOW_SIZE + FUTURE_WINDOW_SIZE
     while True:
+        if len(symbols) == 0:
+            return
         with lock:
             if globalI.value >= n:
                 return
             else:
                 currentI = globalI.value
 
-        symbol = symbols[np.random.randint(0, len(symbols))]
+        with lock:
+            try:
+                symbol = symbols[np.random.randint(0, len(symbols))]
+            except Exception as e:
+                return
         index = 0
         if symbol in symbolsUsed.keys():
             index = symbolsUsed[symbol]
 
         data = loadStockData(symbol[0], symbol[1])
-        if data is None or len(data) < index*207 + 207:
+        if data is None or len(data) < index*window + window:
+            with lock:
+                try:
+                    symbols.remove(symbol)
+                except ValueError:
+                    pass
             continue
-        dataSegment = data.iloc[index*207:index*207+207]
+        dataSegment = data.iloc[index*window:index*window+window]
         with lock:
             symbolsUsed[symbol] = index + 1
         features, label = createTrainingCase(dataSegment)
@@ -357,6 +372,8 @@ def generateTrainingCases(n):
         countrySymbols = loadSymbols(country)
         symbols.extend((country, sym) for sym in countrySymbols)
 
+    symbolsManaged = multiprocessing.Manager().list()
+    symbolsManaged.extend(symbols)
     labelsCount = Array('i', [0, 0, 0])
     globalI = Value('i', 0)
     symbolsUsed = multiprocessing.Manager().dict()
@@ -372,7 +389,7 @@ def generateTrainingCases(n):
     workers = []
     for _ in range(numWorkers):
         p = Process(target=generateTrainingCasesWorker,
-                   args=(symbols, labelsCount, globalI, symbolsUsed, lock, queue, n))
+                   args=(symbolsManaged, labelsCount, globalI, symbolsUsed, lock, queue, n))
         p.start()
         workers.append(p)
 
@@ -382,6 +399,9 @@ def generateTrainingCases(n):
             pbar.n = current_i
             pbar.refresh()
             time.sleep(0.1)
+            with lock:
+                if len(symbolsManaged) == 0:
+                    break
     except KeyboardInterrupt:
         pass
 

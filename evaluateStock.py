@@ -3,42 +3,55 @@ import json
 import time
 import yfinance as yf
 from randomForest import predict, loadOrTrain
-from gatherTrainingData import computeFeatures
+from gatherTrainingData import computeFeatures, WINDOW_SIZE
 import pandas as pd
+import os
+
+PAST = 7
 
 def getStockData(symbol) -> dict:
     stock = yf.Ticker(symbol)
     hist = stock.history(period="max")
+
+    if len(hist) < WINDOW_SIZE + PAST:
+        return None
+
+    hist = hist.tail(WINDOW_SIZE + PAST)
+    hist = hist.head(WINDOW_SIZE)
+
     hist = hist.reset_index()[["Date", "Open", "High", "Low", "Close", "Volume"]]
     hist.columns = ["date", "open", "high", "low", "close", "volume"]
     hist["date"] = pd.to_datetime(hist["date"])
 
-    # take only the last 205 days and cut off the first 5
-    hist = hist.tail(230)
-    hist = hist.head(200)
+    features = computeFeatures(hist)
+    return features
 
-    return computeFeatures(hist)
+def convertToMatrix():
+    with open("data/temp.json", "r") as f, open("data/input.csv", "w") as fMatrix:
+        data = json.load(f)
 
-
-def convertToMatrix(data: dict):
-    dataList = []
-    # data is a dictionary with floats and lists of floats
-    # we want to convert it to a single list of floats
-    for k, v in data.items():
-        if isinstance(v, list):
-            for i in v:
-                dataList.append(i)
-        else:
-            dataList.append(v)
-
-    with open("data/input.csv", "w") as f:
-        for v in dataList:
-            f.write(str(v))
-            f.write(",")
+        ordered_keys = [
+            "day", "month", "weekday", 
+            "close", "volume", "open", "high", "low", 
+            "sma5", "ema5", "macd", "signal", 
+            "bollingerUpper", "bollingerLower", "rsi14", 
+            "stochasticOscillator14k", "stochasticOscillator14d", 
+            "roc14", "atr14", "std14", "volumeAverage5"
+        ]
+        for key in ordered_keys:
+            value = data.get(key, [])
+            if isinstance(value, list):
+                for v in value:
+                    fMatrix.write(f"{v},")
+            else:
+                fMatrix.write(f"{value},")
+        fMatrix.write("\n")
 
 def evaluateStock(stock):
     data = getStockData(stock)
-    convertToMatrix(data)
+    with open("data/temp.json", "w") as f:
+        json.dump(data, f)
+    convertToMatrix()
     prediction = predict(loadOrTrain())
     return prediction
 

@@ -18,11 +18,11 @@ INPUT_FILE = "data/input.csv"
 SIZE_LIMIT = 20
 CHUNK_SIZE = 80000
 
-N_ESTIMATORS = 1000
-MAX_DEPTH = 30
+N_ESTIMATORS = 10000
+MAX_DEPTH = 10
 MIN_SAMPLES_SPLIT = 10
 MIN_SAMPLES_LEAF = 5
-MAX_FEATURES = "log2"
+MAX_FEATURES = "sqrt"
 RANDOM_STATE = 42
 
 TEST_SIZE = 0.2
@@ -146,6 +146,7 @@ def trainBatch():
     print(f"Standard Deviation: {np.std(chunkAccuracies):.2f}")
 
     print("Preprocessing test data...")
+    numFeatures = xTestAll[0].shape[1]
     if xTestAll:
         xTestAll = np.vstack(xTestAll)
         yTestAll = np.concatenate(yTestAll)
@@ -162,15 +163,15 @@ def trainBatch():
     else:
         print("No test data collected for evaluation.")
 
-    modelName = f"rd-model-f32-{totalRows}-{N_ESTIMATORS}-{MAX_DEPTH}-{MIN_SAMPLES_SPLIT}-{MIN_SAMPLES_LEAF}-{MAX_FEATURES}-{RANDOM_STATE}.model"
+    modelName = f"rf-model-f32-{totalRows}-{numFeatures}-{N_ESTIMATORS}-{MAX_DEPTH}-{MIN_SAMPLES_SPLIT}-{MIN_SAMPLES_LEAF}-{MAX_FEATURES}-{RANDOM_STATE}.model"
     modelPath = MODEL_FILE_PATH + modelName
     joblib.dump(rf, modelPath)
     print(f"Model trained and saved successfully as '{modelName}'!")
 
     return rf
 
-def loadOrTrain():
-    if os.path.exists(MODEL_FILE_PATH):
+def loadOrTrain(skipPrompt=False):
+    if os.path.exists(MODEL_FILE_PATH) and not skipPrompt:
         models = os.listdir(MODEL_FILE_PATH)
         for model in models:
             if model.endswith(".model"):
@@ -186,7 +187,10 @@ def loadOrTrain():
             else:
                 print(f"Model '{modelName}' not found! Training a new one...")
     else:
-        os.makedirs(MODEL_FILE_PATH)
+        try:
+            os.makedirs(MODEL_FILE_PATH)
+        except FileExistsError:
+            pass
         print("Model not found!")
 
     print("Training a new model...")
@@ -246,19 +250,18 @@ def loadOrTrain():
 
         print("Evaluating the model...")
         yPred = rf.predict(xTest)
-        print(f"Model Accuracy: {accuracy_score(yTest, yPred):.2f}")
-
-        print("Classification Report:")
-        print(classification_report(yTest, yPred))
-
-        print("k-Fold Cross Validation:")
         kf = TimeSeriesSplit(n_splits=5)
         cvAcc = cross_val_score(rf, xTest, yTest, cv=kf, scoring="accuracy")
+        print(f"Model Accuracy: {accuracy_score(yTest, yPred):.2f}")
+        print("Classification Report:")
+        print(classification_report(yTest, yPred))
+        print("k-Fold Cross Validation:")
         print(f"Cross Validation Accuracy: {np.mean(cvAcc):.2f} (+/- {np.std(cvAcc) * 2:.2f})")
 
+        numFeatures = x.shape[1]
         print("Saving the model...")
 
-        name = f"rd-model-f32-{sizeData}-{N_ESTIMATORS}-{MAX_DEPTH}-{MIN_SAMPLES_SPLIT}-{MIN_SAMPLES_LEAF}-{MAX_FEATURES}-{RANDOM_STATE}.model"
+        name = f"rf-model-f32-{sizeData}-{numFeatures}-{N_ESTIMATORS}-{MAX_DEPTH}-{MIN_SAMPLES_SPLIT}-{MIN_SAMPLES_LEAF}-{MAX_FEATURES}-{RANDOM_STATE}.model"
         joblib.dump(rf, MODEL_FILE_PATH + name)
         print("Model trained and saved successfully!")
 
@@ -285,5 +288,5 @@ def predict(rf):
     return pred
 
 if __name__ == "__main__":
-    rf = loadOrTrain()
+    rf = loadOrTrain(skipPrompt=True)
     predict(rf)
