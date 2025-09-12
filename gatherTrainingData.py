@@ -5,11 +5,19 @@ import pandas as pd
 from datetime import datetime
 import numpy as np
 import tqdm
+from multiprocessing import Process, Array, Value, Lock, Queue, Manager
+import multiprocessing
+from queue import Full
+import time
+import psutil
 
-PERCENTAGE_IMP_TO_BUY = 5 # in percent
-PERCENTAGE_IMP_TO_SELL = 2 # in percent
+PERCENTAGE_INC_TO_BUY = 5 # in percent
+PERCENTAGE_DEC_TO_SELL = 2 # in percent
 
 DATASET_SIZE = 500000
+WINDOW_SIZE = 14
+FUTURE_WINDOW_SIZE = 7
+
 
 COUNTRIES = ["BE", "CH", "DE", "DK", "ES", "FI", "FR", "IT", "NL", "NO", "PL", "PT", "SE", "UK", "US"]
 
@@ -30,6 +38,8 @@ EX_SUFFIXES = {
     "UK": [".L"],  # United Kingdom - London Stock Exchange
     "US": [""],  # US stocks typically have no suffix
 }
+
+QUEUE_LIMIT = int(psutil.virtual_memory().total / (1024 ** 3) * psutil.cpu_count() * 100000)
 
 def loadSymbols(country):
     symbolsFile = f"symbols/{country}_symbols.json"
@@ -143,7 +153,7 @@ def computeStochasticOscillator(data, period) -> list:
     return k.tolist(), d.tolist()
 
 def computeROC(data, period) -> list:
-    roc = data["close"].pct_change(period)
+    roc = data["close"].pct_change(period, fill_method=None)
     roc = roc.bfill()
 
     return roc.tolist()
@@ -174,9 +184,9 @@ def computeVolumeAverage(data, period) -> list:
 def computeFeatures(data) -> dict:
     features = {}
 
-    features["day"] = data["date"].dt.day.tolist()
-    features["month"] = data["date"].dt.month.tolist()
-    features["weekday"] = data["date"].dt.weekday.tolist()
+    features["day"] = data["date"].dt.day.tolist()[-1]
+    features["month"] = data["date"].dt.month.tolist()[-1]
+    features["weekday"] = data["date"].dt.weekday.tolist()[-1]
 
     features["close"] = data["close"].tolist()
     features["volume"] = data["volume"].tolist()
@@ -185,74 +195,72 @@ def computeFeatures(data) -> dict:
     features["low"] = data["low"].tolist()
 
     features["sma5"] = computeSMA(data, 5)
-    features["sma10"] = computeSMA(data, 10)
-    features["sma20"] = computeSMA(data, 20)
-    features["sma100"] = computeSMA(data, 100)
-    features["sma200"] = computeSMA(data, 200)
+    #features["sma10"] = computeSMA(data, 10)
+    #features["sma20"] = computeSMA(data, 20)
+    #features["sma100"] = computeSMA(data, 100)
+    #features["sma200"] = computeSMA(data, 200)
 
     features["ema5"] = computeEMA(data, 5)
-    features["ema10"] = computeEMA(data, 10)
-    features["ema20"] = computeEMA(data, 20)
-    features["ema50"] = computeEMA(data, 50)
-    features["ema100"] = computeEMA(data, 100)
-    features["ema200"] = computeEMA(data, 200)
+    #features["ema10"] = computeEMA(data, 10)
+    #features["ema20"] = computeEMA(data, 20)
+    #features["ema50"] = computeEMA(data, 50)
+    #features["ema100"] = computeEMA(data, 100)
+    #features["ema200"] = computeEMA(data, 200)
 
-    macd, signal = computeMACD(data, 12, 26, 9)
-    features["macd"] = macd
-    features["signal"] = signal
+    #macd, signal = computeMACD(data, 12, 26, 9)
+    #features["macd"] = macd
+    #features["signal"] = signal
 
-    features["bollingerUpper"], features["bollingerLower"] = computeBollinger(data, 20)
+    #features["bollingerUpper"], features["bollingerLower"] = computeBollinger(data, 20)
 
     features["rsi14"] = computeRSI(data, 14)
-    features["rsi28"] = computeRSI(data, 28)
+    #features["rsi28"] = computeRSI(data, 28)
 
     k14, d14 = computeStochasticOscillator(data, 14)
     features["stochasticOscillator14k"] = k14
     features["stochasticOscillator14d"] = d14
-    k28, d28 = computeStochasticOscillator(data, 28)
-    features["stochasticOscillator28k"] = k28
-    features["stochasticOscillator28d"] = d28
-    k50, d50 = computeStochasticOscillator(data, 50)
-    features["stochasticOscillator50k"] = k50
-    features["stochasticOscillator50d"] = d50
+    #k28, d28 = computeStochasticOscillator(data, 28)
+    #features["stochasticOscillator28k"] = k28
+    #features["stochasticOscillator28d"] = d28
+    #k50, d50 = computeStochasticOscillator(data, 50)
+    #features["stochasticOscillator50k"] = k50
+    #features["stochasticOscillator50d"] = d50
 
     features["roc14"] = computeROC(data, 14)
-    features["roc28"] = computeROC(data, 28)
-    features["roc50"] = computeROC(data, 50)
+    #features["roc28"] = computeROC(data, 28)
+    #features["roc50"] = computeROC(data, 50)
 
     features["atr14"] = computeATR(data, 14)
-    features["atr28"] = computeATR(data, 28)
-    features["atr50"] = computeATR(data, 50)
+    #features["atr28"] = computeATR(data, 28)
+    #features["atr50"] = computeATR(data, 50)
 
     features["std14"] = computeStandardDeviation(data, 14)
-    features["std28"] = computeStandardDeviation(data, 28)
-    features["std50"] = computeStandardDeviation(data, 50)
+    #features["std28"] = computeStandardDeviation(data, 28)
+    #features["std50"] = computeStandardDeviation(data, 50)
 
     features["volumeAverage5"] = computeVolumeAverage(data, 5)
-    features["volumeAverage10"] = computeVolumeAverage(data, 10)
-    features["volumeAverage20"] = computeVolumeAverage(data, 20)
-    features["volumeAverage50"] = computeVolumeAverage(data, 50)
-    features["volumeAverage100"] = computeVolumeAverage(data, 100)
-    features["volumeAverage200"] = computeVolumeAverage(data, 200)
+    #features["volumeAverage10"] = computeVolumeAverage(data, 10)
+    #features["volumeAverage20"] = computeVolumeAverage(data, 20)
+    #features["volumeAverage50"] = computeVolumeAverage(data, 50)
+    #features["volumeAverage100"] = computeVolumeAverage(data, 100)
+    #features["volumeAverage200"] = computeVolumeAverage(data, 200)
 
     return features
 
-def evaluateFuture(data) -> int:
+def evaluateFuture(data, currentClose) -> int:
     """ 0: sell, 1: hold, 2: buy """
 
-    decImpToSell = PERCENTAGE_IMP_TO_SELL / 100
-    decImpToBuy = PERCENTAGE_IMP_TO_BUY / 100
+    decDecToSell = PERCENTAGE_DEC_TO_SELL / 100
+    decIncToBuy = PERCENTAGE_INC_TO_BUY / 100
 
-    futureData = data.iloc[-7:]
-    futureClose = futureData["close"].tolist()
-    lastClose = data.iloc[-1]["close"]
+    futureClose = data["close"].tolist()
 
     smallestFutureClose = min(futureClose)
     biggestFutureClose = max(futureClose)
 
-    if smallestFutureClose < lastClose * (1 - decImpToSell):
+    if smallestFutureClose < currentClose * (1 - decDecToSell):
         return 0
-    elif biggestFutureClose > lastClose * (1 + decImpToBuy):
+    elif biggestFutureClose > currentClose * (1 + decIncToBuy):
         return 2
     else:
         return 1
@@ -264,44 +272,148 @@ def printFeatures(features):
 
 def createTrainingCase(data):
     dataNoFuture = data.iloc[:-7]
+    dataFuture = data.iloc[-7:]
+    currentClose = dataNoFuture.iloc[-1]["close"]
     features = computeFeatures(dataNoFuture)
-    label = evaluateFuture(data)
+    label = evaluateFuture(dataFuture, currentClose)
 
     return features, label
+
+def isSimilar(a, b):
+    return abs(a - b) / ((a + b) / 2) < 0.05
+
+def generateTrainingCasesWorker(symbols, labelsCount, globalI, symbolsUsed,lock, queue, n):
+    window = WINDOW_SIZE + FUTURE_WINDOW_SIZE
+    while True:
+        if len(symbols) == 0:
+            return
+        with lock:
+            if globalI.value >= n:
+                return
+            else:
+                currentI = globalI.value
+
+        with lock:
+            try:
+                symbol = symbols[np.random.randint(0, len(symbols))]
+            except Exception as e:
+                return
+        index = 0
+        if symbol in symbolsUsed.keys():
+            index = symbolsUsed[symbol]
+
+        data = loadStockData(symbol[0], symbol[1])
+        if data is None or len(data) < index*window + window:
+            with lock:
+                try:
+                    symbols.remove(symbol)
+                except ValueError:
+                    pass
+            continue
+        dataSegment = data.iloc[index*window:index*window+window]
+        with lock:
+            symbolsUsed[symbol] = index + 1
+        features, label = createTrainingCase(dataSegment)
+        if features is None:
+            continue
+
+        with lock:
+            currentI = globalI.value
+            if currentI >= n:
+                return
+
+            lc = labelsCount[:]
+            allow = True
+            if label == 0:
+                if (lc[0] >= n/3 and
+                    not isSimilar(lc[1], lc[0]) and
+                    not isSimilar(lc[2], lc[0])):
+                    allow = False
+            elif label == 1:
+                if (lc[1] >= n/3 and
+                    not isSimilar(lc[0], lc[1]) and
+                    not isSimilar(lc[2], lc[1])):
+                    allow = False
+            elif label == 2:
+                if (lc[2] >= n/3 and
+                    not isSimilar(lc[0], lc[2]) and
+                    not isSimilar(lc[1], lc[2])):
+                    allow = False
+
+            if allow:
+                labelsCount[label] += 1
+                globalI.value += 1
+                while True:
+                    try:
+                        queue.put((features, label), timeout=0.1)
+                        break
+                    except Full:
+                        if globalI.value >= n:
+                            return
+
+def generateTrainingCasesWriter(queue, n):
+    with open("data/training.json", "w") as f:
+        count = 0
+        while count < n:
+            case = queue.get()
+            if case is None:
+                break
+            features, label = case
+            trainingCase = {
+                "features": features,
+                "label": int(label)
+            }
+            f.write(json.dumps(trainingCase) + "\n")
+            count += 1
 
 def generateTrainingCases(n):
     symbols = []
     for country in COUNTRIES:
         countrySymbols = loadSymbols(country)
-        for symbol in countrySymbols:
-            symbols.append((country, symbol))
+        symbols.extend((country, sym) for sym in countrySymbols)
 
-    print(f"Generating {n} training cases...")
-    with open("data/training.json", "w") as f:
-        i = 0
-        q = tqdm.tqdm(total=n)
-        while i < n:
-            # get random symbol
-            symbol = symbols[np.random.randint(0, len(symbols))]
-            data = loadStockData(symbol[0], symbol[1])
-            # get random period of data that is at least 200 days long and is continuous
-            if data is None or len(data) < 207:
-                continue
-            dataStartIndex = 0
-            dataEndIndex = len(data) - 207
-            randomStartIndex = np.random.randint(dataStartIndex, dataEndIndex)
-            data = data.iloc[randomStartIndex:randomStartIndex+207]
+    symbolsManaged = multiprocessing.Manager().list()
+    symbolsManaged.extend(symbols)
+    labelsCount = Array('i', [0, 0, 0])
+    globalI = Value('i', 0)
+    symbolsUsed = multiprocessing.Manager().dict()
+    lock = Lock()
+    queue = Queue(maxsize=80000)
 
-            features, label = createTrainingCase(data)
-            trainingCase = {
-                "features": features,
-                "label": label
-            }
-            f.write(json.dumps(trainingCase))
-            f.write("\n")
-            i += 1
-            q.update(1)
-        q.close()
+    pbar = tqdm.tqdm(total=n, desc="Generating training cases")
+
+    writerProcess = Process(target=generateTrainingCasesWriter, args=(queue, n))
+    writerProcess.start()
+
+    numWorkers = os.cpu_count()
+    workers = []
+    for _ in range(numWorkers):
+        p = Process(target=generateTrainingCasesWorker,
+                   args=(symbolsManaged, labelsCount, globalI, symbolsUsed, lock, queue, n))
+        p.start()
+        workers.append(p)
+
+    try:
+        while any(w.is_alive() for w in workers):
+            current_i = globalI.value
+            pbar.n = current_i
+            pbar.refresh()
+            time.sleep(0.1)
+            with lock:
+                if len(symbolsManaged) == 0:
+                    break
+    except KeyboardInterrupt:
+        pass
+
+    for w in workers:
+        w.join()
+
+    writerProcess.join()
+
+    pbar.n = globalI.value
+    pbar.close()
+
+    print(f"Generated {globalI.value} training cases with label distribution: {list(labelsCount)}")
 
 def convertTrainingDataToMatrix():
     with open("data/training.json", "r") as f:
@@ -311,15 +423,56 @@ def convertTrainingDataToMatrix():
                 for line in f:
                     data = json.loads(line)
                     for key, value in data["features"].items():
-                        for i in range(len(value)):
-                            if value[i] is None:
-                                value[i] = 0
-                            fMatrix.write(str(value[i]))
+                        if isinstance(value, list):
+                            for i in range(len(value)):
+                                if value[i] is None:
+                                    value[i] = 0
+                                fMatrix.write(str(value[i]))
+                                fMatrix.write(",")
+                        else:
+                            if value is None:
+                                value = 0
+                            fMatrix.write(str(value))
                             fMatrix.write(",")
                     fMatrix.write("\n")
                     fLabels.write(str(data["label"]) + "\n")
                     q.update(1)
                 q.close()
+
+def shuffleTrainingData():
+    matrixOffsets = []
+    with open("data/training_matrix.csv", "rb") as f:
+        for _ in tqdm.tqdm(range(DATASET_SIZE), desc="Reading matrix offsets"):
+            matrixOffsets.append(f.tell())
+            f.readline()
+
+    labelsOffsets = []
+    with open("data/training_labels.csv", "rb") as f:
+        for _ in tqdm.tqdm(range(DATASET_SIZE), desc="Reading labels offsets"):
+            labelsOffsets.append(f.tell())
+            f.readline()
+
+    assert len(matrixOffsets) == DATASET_SIZE and len(labelsOffsets) == DATASET_SIZE, "Dataset size mismatch"
+
+    lineIndices = np.arange(DATASET_SIZE)
+    np.random.shuffle(lineIndices)
+
+    with open("data/training_matrix.csv", "rb") as fMatrixIn, \
+         open("data/training_labels.csv", "rb") as fLabelsIn, \
+         open("data/training_matrix_shuffled.csv.tmp", "wb") as fMatrixOut, \
+         open("data/training_labels_shuffled.csv.tmp", "wb") as fLabelsOut:
+
+        for idx in tqdm.tqdm(lineIndices, desc="Shuffling data"):
+            fMatrixIn.seek(matrixOffsets[idx])
+            matrixLine = fMatrixIn.readline()
+            fMatrixOut.write(matrixLine)
+
+            fLabelsIn.seek(labelsOffsets[idx])
+            labelLine = fLabelsIn.readline()
+            fLabelsOut.write(labelLine)
+
+    os.replace("data/training_matrix_shuffled.csv.tmp", "data/training_matrix.csv")
+    os.replace("data/training_labels_shuffled.csv.tmp", "data/training_labels.csv")
 
 def main():
     #for country in COUNTRIES:
@@ -333,6 +486,10 @@ def main():
     print("Converting training data to matrix...")
     convertTrainingDataToMatrix()
     print("Training data converted to matrix.")
+
+    #print("Shuffling training data...")
+    #shuffleTrainingData()
+    #print("Training data shuffled.")
 
     print("All done.")
 
