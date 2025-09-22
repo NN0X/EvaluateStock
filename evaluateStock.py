@@ -2,7 +2,16 @@ import subprocess
 import json
 import time
 import yfinance as yf
-from randomForest import predict, loadOrTrain
+
+print("Choose model:")
+input_model = input("1. Random Forest\n2. Linear Regression\n")
+if input_model == "1":
+    from randomForest import predict, loadOrTrain
+elif input_model == "2":
+    from linearRegression import predict, loadOrTrain
+else:
+    print("Invalid input")
+    exit(1)
 from gatherTrainingData import computeFeatures, WINDOW_SIZE
 import pandas as pd
 import os
